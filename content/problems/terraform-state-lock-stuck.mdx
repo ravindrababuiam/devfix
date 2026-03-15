@@ -1,0 +1,128 @@
+---
+title: "Terraform State Lock Stuck After Failed Apply"
+description: "How to safely unlock Terraform state when a lock gets stuck after a failed or interrupted terraform apply operation."
+date: "2026-03-11"
+category: "terraform"
+tags: ["terraform", "devops", "azure", "debugging", "infrastructure"]
+environment: ["Terraform 1.7+", "Azure Blob Storage Backend", "Azure DevOps Pipeline"]
+errorMessage: "Error acquiring the state lock: state blob is already locked"
+difficulty: "intermediate"
+---
+
+## Problem
+
+Running `terraform apply` or `terraform plan` fails because a previous operation left the state file locked. This commonly happens when a CI/CD pipeline times out, a terminal session is killed, or `terraform apply` crashes midway through.
+
+## Error Message
+
+```
+Error: Error acquiring the state lock
+
+Error message: state blob is already locked (ID: "a1b2c3d4-e5f6-7890-abcd-ef1234567890")
+Lock Info:
+  ID:        a1b2c3d4-e5f6-7890-abcd-ef1234567890
+  Path:      terraform.tfstate
+  Operation: OperationTypeApply
+  Who:       runner@build-agent
+  Version:   1.7.3
+  Created:   2026-03-11 10:15:22.123456 +0000 UTC
+
+Terraform acquires a state lock to protect the state from being
+written by multiple users at the same time. Please resolve the
+issue above and try again.
+```
+
+## Root Cause
+
+Terraform uses a locking mechanism to prevent concurrent state modifications. When a `terraform apply` is interrupted (pipeline timeout, Ctrl+C, crash), the lock isn't released. The state backend (Azure Blob Storage in this case) retains the lease.
+
+## Solution
+
+### Step 1: Verify no one else is running Terraform
+
+Before force-unlocking, confirm that no other apply is in progress. Check your CI/CD pipeline runs and ask your team.
+
+### Step 2: Force unlock the state
+
+Use the lock ID from the error message:
+
+```bash title="Force unlock"
+terraform force-unlock a1b2c3d4-e5f6-7890-abcd-ef1234567890
+```
+
+Terraform will ask for confirmation. Type `yes`:
+
+```
+Do you really want to force-unlock?
+  Terraform will remove the lock on the remote state.
+  This will allow local Terraform commands to modify this state, even though it
+  may still be in use. Only 'yes' will be accepted to confirm.
+
+  Enter a value: yes
+
+Terraform state has been successfully unlocked!
+```
+
+### Step 3: If force-unlock fails, break the Azure blob lease
+
+Sometimes the Terraform unlock command itself fails. In that case, break the blob lease directly:
+
+```powershell title="Break Azure blob lease"
+$ctx = New-AzStorageContext -StorageAccountName "tfstatestorage" -StorageAccountKey $storageKey
+$blob = Get-AzStorageBlob -Container "tfstate" -Blob "terraform.tfstate" -Context $ctx
+$blob.ICloudBlob.BreakLease()
+Write-Output "Blob lease broken successfully"
+```
+
+Or using Azure CLI:
+
+```bash title="Break lease with Azure CLI"
+az storage blob lease break \
+  --account-name tfstatestorage \
+  --container-name tfstate \
+  --blob-name terraform.tfstate \
+  --auth-mode key \
+  --account-key "$STORAGE_KEY"
+```
+
+### Step 4: Verify and run plan
+
+```bash
+terraform plan
+```
+
+If the plan runs without lock errors, the issue is resolved.
+
+## Prevention
+
+Add a timeout handler to your CI/CD pipeline that releases the lock on failure:
+
+```yaml title="azure-pipelines.yml"
+steps:
+  - task: TerraformTaskV4@4
+    inputs:
+      command: 'apply'
+      commandOptions: '-auto-approve -lock-timeout=5m'
+    timeoutInMinutes: 30
+    continueOnError: false
+
+  - script: |
+      if [ $? -ne 0 ]; then
+        echo "Apply failed, attempting to release state lock..."
+        terraform force-unlock -force $(terraform show -json | jq -r '.lock_id // empty') 2>/dev/null || true
+      fi
+    condition: failed()
+    displayName: 'Release state lock on failure'
+```
+
+## Lessons Learned
+
+- **Always use `-lock-timeout`** to give Terraform time to wait for a lock instead of failing immediately. A value of `5m` covers most cases.
+- **Never force-unlock without verifying** that no other operation is running. Force-unlocking during a live apply can corrupt your state.
+- **Set up pipeline timeouts** with proper cleanup steps that release locks on failure.
+- **Consider state file backups** — Azure Blob Storage versioning gives you a safety net if state gets corrupted.
+
+## References
+
+- [Terraform CLI: force-unlock](https://developer.hashicorp.com/terraform/cli/commands/force-unlock)
+- [Azure Blob Storage lease management](https://learn.microsoft.com/en-us/azure/storage/blobs/lease-blob-manage)

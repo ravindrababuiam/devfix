@@ -1,0 +1,102 @@
+---
+title: "Azure Automation Runbook Fails with 'Could not establish Azure context'"
+description: "Fix the Azure Automation Runbook authentication failure when connecting to Azure Government Cloud using Managed Identity."
+date: "2026-03-15"
+category: "azure"
+tags: ["azure", "runbook", "powershell", "automation", "managed-identity"]
+environment: ["Azure Government Cloud", "Automation Account", "Managed Identity", "PowerShell 7.2"]
+errorMessage: "Could not establish Azure context"
+difficulty: "intermediate"
+---
+
+## Problem
+
+An Azure Automation Runbook that uses Managed Identity authentication fails immediately on execution. The runbook was working in a commercial Azure environment but fails after being migrated to Azure Government Cloud.
+
+## Error Message
+
+The following error appears in the runbook job output:
+
+```
+Connect-AzAccount : Could not establish Azure context.
+At line:3 char:1
++ Connect-AzAccount -Identity
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : CloseError: (:) [Connect-AzAccount], PSInvalidOperationException
+    + FullyQualifiedErrorId : Microsoft.Azure.Commands.Profile.ConnectAzureRmAccountCommand
+```
+
+## Root Cause
+
+The `Connect-AzAccount -Identity` command defaults to the **AzureCloud** environment (commercial Azure). When running in **Azure Government Cloud**, the command must explicitly specify the `-Environment AzureUSGovernment` parameter.
+
+Without this parameter, the Managed Identity token endpoint resolves to the wrong Azure AD authority, causing the authentication to fail.
+
+## Solution
+
+Update the `Connect-AzAccount` command to include the correct environment parameter:
+
+```powershell title="Fixed Runbook Authentication"
+# Connect using Managed Identity in Azure Government
+Connect-AzAccount -Identity -Environment AzureUSGovernment
+
+# Verify the connection
+$context = Get-AzContext
+Write-Output "Connected to: $($context.Environment.Name)"
+Write-Output "Subscription: $($context.Subscription.Name)"
+```
+
+### Full Runbook Example
+
+```powershell title="Complete-Runbook.ps1"
+try {
+    # Authenticate with Managed Identity (Azure Government)
+    Connect-AzAccount -Identity -Environment AzureUSGovernment
+    
+    $context = Get-AzContext
+    if (-not $context) {
+        throw "Failed to establish Azure context"
+    }
+    
+    Write-Output "Successfully connected to $($context.Environment.Name)"
+    Write-Output "Subscription: $($context.Subscription.Name)"
+    
+    # Your automation logic here
+    $resourceGroups = Get-AzResourceGroup
+    Write-Output "Found $($resourceGroups.Count) resource groups"
+    
+} catch {
+    Write-Error "Runbook failed: $_"
+    throw
+}
+```
+
+### Azure Environment Values
+
+| Cloud | Environment Value |
+|-------|-------------------|
+| Azure Commercial | `AzureCloud` |
+| Azure Government | `AzureUSGovernment` |
+| Azure China | `AzureChinaCloud` |
+| Azure Germany | `AzureGermanCloud` |
+
+## Verification
+
+After applying the fix, verify the connection is using the correct environment:
+
+```powershell
+$context = Get-AzContext
+$context.Environment.Name  # Should output: AzureUSGovernment
+```
+
+## Lessons Learned
+
+- **Always specify the environment parameter** when working with sovereign clouds. The default `AzureCloud` assumption is a common source of authentication failures.
+- **Test runbooks in the target environment** before migrating from commercial to government cloud.
+- **Document cloud-specific configuration** for every automation script — environment parameters, endpoint URLs, and region restrictions.
+
+## References
+
+- [Azure Government Cloud documentation](https://learn.microsoft.com/en-us/azure/azure-government/)
+- [Connect-AzAccount reference](https://learn.microsoft.com/en-us/powershell/module/az.accounts/connect-azaccount)
+- [Azure Automation Managed Identity](https://learn.microsoft.com/en-us/azure/automation/enable-managed-identity-for-automation)

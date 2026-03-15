@@ -1,0 +1,9 @@
+# *
+User-agent: *
+Allow: /
+
+# Host
+Host: https://devfix.dev
+
+# Sitemaps
+Sitemap: https://devfix.dev/sitemap.xml

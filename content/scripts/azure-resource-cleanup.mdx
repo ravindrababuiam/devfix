@@ -1,0 +1,182 @@
+---
+title: "Azure Resource Group Cleanup Script"
+description: "PowerShell script to identify and remove unused Azure resource groups based on tags and age, with safety checks and dry-run support."
+date: "2026-03-13"
+category: "automation"
+tags: ["azure", "powershell", "automation", "cleanup", "cost-optimization"]
+environment: ["Azure Commercial Cloud", "PowerShell 7.x", "Az Module 12.x"]
+difficulty: "intermediate"
+---
+
+## Problem
+
+Azure subscriptions accumulate unused resource groups from development, testing, and proof-of-concept work. These forgotten resources incur ongoing costs. A reliable, automated cleanup process is needed with safety guardrails.
+
+## Solution
+
+The following PowerShell script identifies resource groups that match cleanup criteria (based on tags and age), supports a dry-run mode for safety, and logs all actions.
+
+### The Script
+
+```powershell title="Cleanup-AzureResourceGroups.ps1"
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $false)]
+    [int]$MaxAgeDays = 30,
+    
+    [Parameter(Mandatory = $false)]
+    [string]$TagName = "Environment",
+    
+    [Parameter(Mandatory = $false)]
+    [string[]]$TagValues = @("dev", "test", "sandbox"),
+    
+    [Parameter(Mandatory = $false)]
+    [string[]]$ExcludePatterns = @("prod-*", "shared-*", "core-*"),
+    
+    [Parameter(Mandatory = $false)]
+    [switch]$DryRun = $true,
+    
+    [Parameter(Mandatory = $false)]
+    [switch]$Force
+)
+
+$ErrorActionPreference = "Stop"
+$timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
+$logFile = "cleanup-log-$timestamp.txt"
+
+function Write-Log {
+    param([string]$Message, [string]$Level = "INFO")
+    $entry = "[$(Get-Date -Format 'HH:mm:ss')] [$Level] $Message"
+    Write-Output $entry
+    Add-Content -Path $logFile -Value $entry
+}
+
+# Connect to Azure (skip if already connected)
+$context = Get-AzContext
+if (-not $context) {
+    Write-Log "No Azure context found. Please run Connect-AzAccount first." "ERROR"
+    exit 1
+}
+
+Write-Log "Connected to subscription: $($context.Subscription.Name)"
+Write-Log "Mode: $(if ($DryRun) { 'DRY RUN' } else { 'LIVE DELETE' })"
+Write-Log "Max age: $MaxAgeDays days"
+Write-Log "Tag filter: $TagName in [$($TagValues -join ', ')]"
+
+# Get all resource groups
+$allRGs = Get-AzResourceGroup
+Write-Log "Found $($allRGs.Count) total resource groups"
+
+$cutoffDate = (Get-Date).AddDays(-$MaxAgeDays)
+$toDelete = @()
+
+foreach ($rg in $allRGs) {
+    $name = $rg.ResourceGroupName
+    
+    # Skip excluded patterns
+    $excluded = $false
+    foreach ($pattern in $ExcludePatterns) {
+        if ($name -like $pattern) {
+            $excluded = $true
+            break
+        }
+    }
+    if ($excluded) {
+        Write-Log "SKIP (excluded pattern): $name" "DEBUG"
+        continue
+    }
+    
+    # Check tag match
+    $tagValue = $rg.Tags[$TagName]
+    if (-not $tagValue -or $tagValue -notin $TagValues) {
+        Write-Log "SKIP (no matching tag): $name" "DEBUG"
+        continue
+    }
+    
+    # Check resource group age via activity log
+    $createdEvent = Get-AzActivityLog -ResourceGroupName $name `
+        -StartTime $cutoffDate `
+        -MaxRecord 1 2>$null
+    
+    if ($createdEvent) {
+        Write-Log "SKIP (recent activity): $name" "DEBUG"
+        continue
+    }
+    
+    $toDelete += $rg
+    Write-Log "CANDIDATE: $name (Tag: $tagValue)"
+}
+
+Write-Log "Found $($toDelete.Count) resource groups to clean up"
+
+if ($toDelete.Count -eq 0) {
+    Write-Log "No resource groups match cleanup criteria. Exiting."
+    exit 0
+}
+
+if ($DryRun) {
+    Write-Log "DRY RUN complete. No resources were deleted."
+    Write-Log "Run with -DryRun:`$false to perform actual deletion."
+    exit 0
+}
+
+if (-not $Force) {
+    $confirm = Read-Host "Delete $($toDelete.Count) resource groups? (yes/no)"
+    if ($confirm -ne "yes") {
+        Write-Log "Cancelled by user."
+        exit 0
+    }
+}
+
+foreach ($rg in $toDelete) {
+    $name = $rg.ResourceGroupName
+    try {
+        Write-Log "DELETING: $name"
+        Remove-AzResourceGroup -Name $name -Force
+        Write-Log "DELETED: $name" "SUCCESS"
+    } catch {
+        Write-Log "FAILED to delete $name : $_" "ERROR"
+    }
+}
+
+Write-Log "Cleanup complete. Log saved to $logFile"
+```
+
+### Usage Examples
+
+```powershell title="Dry run (default, safe)"
+.\Cleanup-AzureResourceGroups.ps1 -MaxAgeDays 30
+```
+
+```powershell title="Live deletion with confirmation"
+.\Cleanup-AzureResourceGroups.ps1 -MaxAgeDays 60 -DryRun:$false
+```
+
+```powershell title="Custom tag filter"
+.\Cleanup-AzureResourceGroups.ps1 -TagName "Project" -TagValues @("poc", "demo") -MaxAgeDays 14
+```
+
+```powershell title="Automated (no prompt)"
+.\Cleanup-AzureResourceGroups.ps1 -DryRun:$false -Force -MaxAgeDays 90
+```
+
+## How It Works
+
+1. **Connects** to the current Azure context (subscription)
+2. **Filters** resource groups by tag name/value match
+3. **Excludes** resource groups matching protection patterns (e.g., `prod-*`)
+4. **Checks age** via Azure Activity Log to avoid deleting recently active resources
+5. **Dry-run by default** — shows what would be deleted without making changes
+6. **Logs everything** to a timestamped file for audit trail
+
+## Lessons Learned
+
+- **Always default to dry-run mode** for destructive automation scripts. Make deletion the explicit opt-in behavior.
+- **Tag-based resource management** is essential at scale. Enforce tagging policies from day one.
+- **Exclude patterns** provide a safety net against accidentally deleting critical infrastructure.
+- **Activity log checks** add a second layer of protection beyond tag-based filtering.
+
+## References
+
+- [Get-AzResourceGroup](https://learn.microsoft.com/en-us/powershell/module/az.resources/get-azresourcegroup)
+- [Azure tagging best practices](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-tagging)

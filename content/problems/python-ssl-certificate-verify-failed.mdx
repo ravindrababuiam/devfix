@@ -1,0 +1,135 @@
+---
+title: "Python SSL Certificate Verify Failed Behind Corporate Proxy"
+description: "Fix the 'CERTIFICATE_VERIFY_FAILED' SSL error in Python when running behind a corporate proxy or firewall with custom CA certificates."
+date: "2026-03-10"
+category: "python"
+tags: ["python", "debugging", "networking", "ssl", "devops"]
+environment: ["Python 3.11", "Windows 11", "Corporate Network", "pip"]
+errorMessage: "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate"
+difficulty: "intermediate"
+---
+
+## Problem
+
+Python scripts, `pip install`, and `requests` library calls all fail with SSL certificate verification errors when running on a corporate network. The corporate firewall performs SSL inspection, injecting its own CA certificate that Python doesn't trust.
+
+## Error Message
+
+```python
+requests.exceptions.SSLError: HTTPSConnectionPool(host='pypi.org', port=443):
+Max retries exceeded with url: /simple/requests/ (Caused by
+SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED]
+certificate verify failed: unable to get local issuer certificate
+(_ssl.c:1006)')))
+```
+
+Or with pip:
+
+```
+WARNING: Retrying (Retry(total=4)) after connection broken by
+'SSLError(SSLCertVerificationError(1, "[SSL: CERTIFICATE_VERIFY_FAILED]
+certificate verify failed"))': /simple/numpy/
+```
+
+## Root Cause
+
+Corporate firewalls often perform **SSL/TLS inspection** (also called SSL bumping). They intercept HTTPS traffic, decrypt it for inspection, and re-encrypt it using the organization's internal CA certificate. Python's `certifi` bundle doesn't include this corporate CA, so all HTTPS requests fail verification.
+
+## Solution
+
+### Option 1: Add the corporate CA to Python's certificate bundle (recommended)
+
+First, export your corporate CA certificate. You can find it in your browser:
+
+1. Visit `https://pypi.org` in your browser
+2. Click the lock icon → Certificate → Details
+3. Export the root CA certificate as a `.pem` file
+
+Then find and append it to Python's certificate store:
+
+```python title="find_cert_path.py"
+import certifi
+print(certifi.where())
+# Output: C:\Users\you\AppData\...\certifi\cacert.pem
+```
+
+```powershell title="Append corporate CA"
+$certPath = python -c "import certifi; print(certifi.where())"
+Get-Content "corporate-ca.pem" | Add-Content $certPath
+Write-Output "Corporate CA appended to: $certPath"
+```
+
+### Option 2: Set the REQUESTS_CA_BUNDLE environment variable
+
+```powershell title="Set environment variable (Windows)"
+# Point to a custom CA bundle that includes the corporate cert
+[Environment]::SetEnvironmentVariable("REQUESTS_CA_BUNDLE", "C:\certs\ca-bundle.crt", "User")
+
+# Or for the current session only
+$env:REQUESTS_CA_BUNDLE = "C:\certs\ca-bundle.crt"
+```
+
+```bash title="Set environment variable (Linux/Mac)"
+export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+```
+
+### Option 3: For pip specifically
+
+```bash title="pip with custom cert"
+pip install --cert /path/to/corporate-ca.pem numpy
+
+# Or configure globally
+pip config set global.cert /path/to/corporate-ca.pem
+```
+
+### Option 4: Use pip-system-certs (automatic)
+
+This package makes pip and Python use the OS certificate store automatically:
+
+```bash
+pip install pip-system-certs --trusted-host pypi.org --trusted-host files.pythonhosted.org
+```
+
+### What NOT to do
+
+**Never disable SSL verification in production:**
+
+```python title="DO NOT DO THIS in production"
+# This is insecure - only use for debugging
+import requests
+requests.get("https://example.com", verify=False)  # BAD
+```
+
+```bash title="DO NOT DO THIS"
+pip install --trusted-host pypi.org numpy  # Disables cert check
+```
+
+## Verification
+
+After applying the fix, verify SSL works:
+
+```python title="verify_ssl.py"
+import requests
+
+response = requests.get("https://pypi.org")
+print(f"Status: {response.status_code}")
+print(f"SSL verified successfully")
+```
+
+```bash
+pip install --upgrade pip
+# Should complete without SSL errors
+```
+
+## Lessons Learned
+
+- **Corporate SSL inspection is a common source of Python SSL errors.** When onboarding to a new company or network, set up certificate trust early.
+- **Prefer adding the CA to the certificate bundle** over disabling verification. `verify=False` introduces real security risks.
+- **Document the corporate certificate setup** in your team's onboarding guide. Every new developer will hit this issue.
+- **The `pip-system-certs` package** is a quick win for teams — it makes Python use the OS trust store, which usually already has the corporate CA.
+
+## References
+
+- [Python requests: SSL Cert Verification](https://docs.python-requests.org/en/latest/user/advanced/#ssl-cert-verification)
+- [pip documentation: Configuration](https://pip.pypa.io/en/stable/topics/configuration/)
+- [certifi: Python Certificate Authority bundle](https://pypi.org/project/certifi/)

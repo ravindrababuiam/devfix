@@ -1,0 +1,89 @@
+---
+title: "Always Verify Your Cloud Environment Before Deployment"
+description: "A lesson learned from deploying Azure resources to the wrong cloud environment, causing hours of debugging and wasted effort."
+date: "2026-03-12"
+category: "cloud"
+tags: ["azure", "cloud", "devops", "lessons-learned", "automation"]
+environment: ["Azure Government Cloud", "Azure Commercial Cloud", "Terraform"]
+difficulty: "beginner"
+---
+
+## The Situation
+
+After spending a full day building and testing an Azure Automation solution in our development subscription (Azure Commercial), we deployed it to production — Azure Government Cloud. Everything failed silently. The runbooks executed but couldn't reach any resources. Logs showed cryptic authentication errors that led us down the wrong path for hours.
+
+## What Went Wrong
+
+The deployment pipeline was configured for `AzureCloud` (commercial). When we pushed to the government subscription, the Terraform provider and the runbook scripts both defaulted to commercial endpoints:
+
+```hcl title="terraform/main.tf (broken)"
+provider "azurerm" {
+  features {}
+  subscription_id = var.subscription_id
+  # Missing: environment = "usgovernment"
+}
+```
+
+```powershell title="runbook.ps1 (broken)"
+Connect-AzAccount -Identity
+# Missing: -Environment AzureUSGovernment
+```
+
+## The Fix
+
+We added explicit environment configuration at every layer:
+
+```hcl title="terraform/main.tf (fixed)"
+provider "azurerm" {
+  features {}
+  subscription_id = var.subscription_id
+  environment     = var.cloud_environment  # "public" or "usgovernment"
+}
+```
+
+```powershell title="runbook.ps1 (fixed)"
+$environment = Get-AutomationVariable -Name 'CloudEnvironment'
+Connect-AzAccount -Identity -Environment $environment
+```
+
+## Key Takeaways
+
+1. **Never assume the default cloud environment.** Always make it explicit and configurable — in your Terraform, in your scripts, in your CI/CD pipelines.
+
+2. **Create a pre-deployment checklist** that includes environment verification. Automate it if possible:
+
+```bash title="deploy-check.sh"
+#!/bin/bash
+echo "Target subscription: $ARM_SUBSCRIPTION_ID"
+echo "Cloud environment: $ARM_ENVIRONMENT"
+
+if [[ "$ARM_ENVIRONMENT" == "usgovernment" ]]; then
+  echo "Deploying to Azure Government"
+elif [[ "$ARM_ENVIRONMENT" == "public" ]]; then
+  echo "Deploying to Azure Commercial"
+else
+  echo "ERROR: ARM_ENVIRONMENT not set!"
+  exit 1
+fi
+
+read -p "Continue? (y/n) " -n 1 -r
+echo
+[[ $REPLY =~ ^[Yy]$ ]] || exit 1
+```
+
+3. **Test in the target environment early.** Don't build everything in commercial and deploy to government at the last minute. Set up a dev resource group in the target cloud from day one.
+
+4. **Use environment variables, not hardcoded values.** Every cloud-specific value (endpoints, environment names, region restrictions) should come from configuration, not be baked into code.
+
+## The Cost
+
+- 4 hours of debugging authentication failures
+- 2 hours rebuilding and retesting with correct environment settings
+- 1 missed deployment window
+
+Total impact: nearly a full day of engineering time that could have been avoided with a 5-minute configuration check.
+
+## References
+
+- [Azure sovereign clouds overview](https://learn.microsoft.com/en-us/azure/active-directory/develop/authentication-national-cloud)
+- [Terraform Azure provider environment setting](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs#environment)

@@ -1,0 +1,94 @@
+---
+title: "Docker Container Port Binding Conflict on Windows"
+description: "Resolve 'Ports are not available: port is already allocated' error when running Docker containers on Windows."
+date: "2026-03-14"
+category: "docker"
+tags: ["docker", "devops", "debugging", "windows", "networking"]
+environment: ["Windows 11", "Docker Desktop 4.x", "WSL2"]
+errorMessage: "Ports are not available: listen tcp 0.0.0.0:5432: bind: An attempt was made to access a socket in a way forbidden by its access permissions"
+difficulty: "beginner"
+---
+
+## Problem
+
+When starting a Docker container with a port mapping, Docker fails to bind the port even though no other container is using it. This commonly affects ports like 5432 (PostgreSQL), 3000 (Node.js), or 8080 (web servers) on Windows machines.
+
+## Error Message
+
+```
+docker: Error response from daemon: Ports are not available: 
+listen tcp 0.0.0.0:5432: bind: An attempt was made to access 
+a socket in a way forbidden by its access permissions.
+```
+
+## Root Cause
+
+Windows reserves dynamic port ranges for Hyper-V, and these reserved ranges can overlap with commonly used development ports. The Windows NAT (WinNAT) service also reserves port ranges that conflict with Docker port bindings.
+
+This is especially common after Windows updates or when Hyper-V/WSL2 features are enabled.
+
+## Solution
+
+### Step 1: Identify the reserved port ranges
+
+```powershell title="Check reserved ports"
+netsh interface ipv4 show excludedportrange protocol=tcp
+```
+
+If your target port falls within one of the excluded ranges, it is reserved by Hyper-V.
+
+### Step 2: Fix by restarting WinNAT
+
+```powershell title="Restart WinNAT service"
+net stop winnat
+net start winnat
+```
+
+### Step 3: If the port is still blocked, reserve it before Hyper-V does
+
+```powershell title="Reserve port permanently"
+# Stop WinNAT first
+net stop winnat
+
+# Reserve the port range you need
+netsh int ipv4 add excludedportrange protocol=tcp startport=5432 numberofports=1
+
+# Restart WinNAT
+net start winnat
+```
+
+### Step 4: Alternative — use a different port
+
+If the above doesn't work, map to a different host port:
+
+```bash title="Use alternative port"
+docker run -d -p 15432:5432 --name postgres postgres:16
+```
+
+Then connect to `localhost:15432` instead.
+
+## Verification
+
+Confirm the container is running with the correct port mapping:
+
+```bash
+docker ps --format "table {{.Names}}\t{{.Ports}}\t{{.Status}}"
+```
+
+Expected output:
+
+```
+NAMES      PORTS                     STATUS
+postgres   0.0.0.0:5432->5432/tcp    Up 2 minutes
+```
+
+## Lessons Learned
+
+- **Windows Hyper-V port reservations** are a hidden cause of Docker port conflicts — always check `excludedportrange` first.
+- **Restarting WinNAT** is often the fastest fix and should be the first thing to try.
+- **Keep a list of required ports** for your development stack and reserve them proactively after fresh Windows installations.
+
+## References
+
+- [Docker Desktop for Windows known issues](https://docs.docker.com/desktop/troubleshoot/known-issues/)
+- [Microsoft: TCP/IP port exclusion](https://learn.microsoft.com/en-us/troubleshoot/windows-server/networking/tcp-ip-port-exclusion)

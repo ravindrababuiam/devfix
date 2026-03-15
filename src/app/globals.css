@@ -1,0 +1,166 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: var(--font-sans-var, "Inter"), ui-sans-serif, system-ui, -apple-system,
+    sans-serif;
+  --font-mono: var(--font-mono-var, "JetBrains Mono"), ui-monospace, "Cascadia Code",
+    "Fira Code", monospace;
+
+  --color-brand-50: #eff6ff;
+  --color-brand-100: #dbeafe;
+  --color-brand-200: #bfdbfe;
+  --color-brand-300: #93c5fd;
+  --color-brand-400: #60a5fa;
+  --color-brand-500: #3b82f6;
+  --color-brand-600: #2563eb;
+  --color-brand-700: #1d4ed8;
+  --color-brand-800: #1e40af;
+  --color-brand-900: #1e3a8a;
+  --color-brand-950: #172554;
+
+  --color-surface-light: #ffffff;
+  --color-surface-dark: #0a0a0f;
+  --color-surface-card-light: #f8fafc;
+  --color-surface-card-dark: #12121a;
+  --color-border-light: #e2e8f0;
+  --color-border-dark: #1e293b;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply bg-white text-gray-900 dark:bg-[#0a0a0f] dark:text-gray-100;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Prose overrides for MDX content */
+.prose {
+  --tw-prose-pre-bg: transparent;
+}
+
+.prose pre {
+  @apply !p-0 !m-0 !bg-transparent;
+}
+
+.prose pre > code {
+  @apply grid;
+}
+
+/* rehype-pretty-code figure styling */
+[data-rehype-pretty-code-figure] {
+  @apply relative my-6 overflow-hidden rounded-xl border border-gray-200 bg-[#22272e] dark:border-gray-800;
+}
+
+[data-rehype-pretty-code-figure] pre {
+  @apply overflow-x-auto py-4 text-[13px] leading-relaxed;
+}
+
+[data-rehype-pretty-code-figure] code {
+  @apply grid font-mono;
+  counter-reset: line;
+}
+
+[data-rehype-pretty-code-figure] [data-line] {
+  @apply border-l-2 border-transparent px-5;
+}
+
+[data-rehype-pretty-code-figure] [data-highlighted-line] {
+  @apply border-l-brand-400 bg-brand-500/8;
+}
+
+[data-rehype-pretty-code-title] {
+  @apply border-b border-gray-700/50 bg-[#1c2128] px-5 py-2.5 text-xs font-medium tracking-wide text-gray-400;
+}
+
+[data-rehype-pretty-code-title] + pre {
+  @apply rounded-t-none;
+}
+
+/* Light mode code blocks: force dark background */
+:root [data-rehype-pretty-code-figure] pre {
+  background-color: #22272e !important;
+}
+
+:root [data-rehype-pretty-code-figure] code {
+  color: #adbac7 !important;
+}
+
+/* Inline code */
+.prose :not(pre) > code {
+  @apply rounded-md border border-gray-200 bg-gray-100/80 px-1.5 py-0.5 text-[0.875em] font-medium text-gray-800 dark:border-gray-700 dark:bg-gray-800/80 dark:text-gray-200;
+}
+
+.prose :not(pre) > code::before,
+.prose :not(pre) > code::after {
+  content: none;
+}
+
+/* Anchor link styling */
+.prose a.anchor-link {
+  @apply no-underline;
+}
+
+.prose a.anchor-link:hover {
+  @apply underline decoration-brand-400/50 underline-offset-4;
+}
+
+/* Table styling */
+.prose table {
+  @apply overflow-hidden rounded-lg border border-gray-200 dark:border-gray-800;
+}
+
+.prose thead {
+  @apply bg-gray-50 dark:bg-gray-900/50;
+}
+
+.prose th {
+  @apply border-b border-gray-200 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-600 dark:border-gray-800 dark:text-gray-400;
+}
+
+.prose td {
+  @apply border-b border-gray-100 px-4 py-3 text-sm dark:border-gray-800/50;
+}
+
+.prose tbody tr:last-child td {
+  @apply border-b-0;
+}
+
+/* Blockquote styling */
+.prose blockquote {
+  @apply border-l-brand-500 bg-brand-50/30 py-1 pl-6 italic dark:bg-brand-900/10;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply rounded-full bg-gray-300 dark:bg-gray-700;
+}
+
+/* Selection */
+::selection {
+  @apply bg-brand-500/20;
+}
+
+/* Smooth focus transitions */
+*:focus-visible {
+  @apply outline-none ring-2 ring-brand-500/50 ring-offset-2 ring-offset-white dark:ring-offset-[#0a0a0f];
+}
+
+input:focus-visible,
+button:focus-visible {
+  @apply ring-0 ring-offset-0;
+}
